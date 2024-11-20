@@ -8,6 +8,7 @@ from app.db.citations.crud import insert_citation
 from app.logger import logger
 
 
+
 class CitationsAPI:
 
     def proccess_citation(self, aspxauth_container: dict, citation_id: str, case_id: int):
@@ -23,6 +24,8 @@ class CitationsAPI:
             citation_title = citation_title.text
         else:
             citation_title = None
+
+        print('case_id',type(case_id), case_id, )
 
         citation = insert_citation(
             unique_id=citation_id,

@@ -7,6 +7,36 @@ from app.db.database import Session
 from app.logger import logger
 
 
+def get_case_by_scc_id(scc_id: str):
+    with Session() as session:
+        try:
+            case = session.query(Case).filter_by(scc_id=scc_id).first()
+            if case:
+                return case
+
+        except Exception as e:
+            logger.error({
+                "message": "Failed to get case by scc_id",
+                "error": str(e),
+            })
+
+
+def get_cases_by_date(date: datetime):
+    with Session() as session:
+        try:
+            cases = session.query(Case).filter_by(date=date).all()
+            if cases:
+                return cases
+            else:
+                return []
+
+        except Exception as e:
+            logger.error({
+                "message": "Failed to get cases by date",
+                "error": str(e),
+            })
+
+
 def insert_case(
     scc_id: str,
     bench_name: str,

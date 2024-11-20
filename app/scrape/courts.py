@@ -1,5 +1,6 @@
 import threading
 import time
+from calendar import month
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 
@@ -8,7 +9,7 @@ import requests
 from requests import Response
 
 from app import constants
-from app.db.cases.crud import insert_case
+from app.db.cases.crud import insert_case, get_case_by_scc_id, get_cases_by_date
 from app.db.scraped.crud import insert_scraped_record
 from app.custom_dataclasses import Court
 from app.logger import logger
@@ -19,7 +20,8 @@ from app.scrape.citations import CitationsAPI
 class CourtsAPI:
     def __init__(self):
         self.citation_api = CitationsAPI()
-        self.executor = ThreadPoolExecutor(max_workers=150)
+        self.cases_executor = ThreadPoolExecutor(max_workers=100)
+        self.citations_executor = ThreadPoolExecutor(max_workers=100)
         self.records = []
         self.record = {}
 
@@ -99,10 +101,15 @@ class CourtsAPI:
                         # 'case_info' is a dictionary containing information about the case
                         # Particulary: scc_id, bench_name, case_no, advocates, citations
                         case_info = self.scrap_case_information_from_case_page(page)
+
+                        existing_case = get_case_by_scc_id(case_info.get("scc_id"))
+                        if existing_case:
+                            continue
+
                         case_id = self.save_case_into_db(case_info=case_info, record=self.record)
 
                         # For each citation in the case, scrap additional data and store it in the database
-                        self.executor.submit(self._process_citations, aspxauth_container, case_info.get("citations"), case_id)
+                        self.citations_executor.submit(self._process_citations, aspxauth_container, case_info.get("citations"), case_id)
 
                         # Store the record in the database
                         # It is just for justification that the record was scraped
@@ -116,12 +123,8 @@ class CourtsAPI:
                         )
 
                         self.records.append(self.record.copy())
-
                     else:
-                        previous_courts.append(court)
-                        courts_scraped.extend(
-                            self._fetch_courts_and_subcourts(aspxauth_container, country, previous_courts))
-                        previous_courts.pop()
+                        self.cases_executor.submit(self._fetch_courts_and_subcourts, aspxauth_container, country, previous_courts + [court])
 
         except Exception as e:
             logger.error({
@@ -198,6 +201,47 @@ class CourtsAPI:
 
         else:
             return True
+
+    def _check_if_day_was_scraped(self, aspxauth_container: dict, country: str, previous_courts: list) -> bool:
+        url = f"{constants.BASE_URL}/Searcher.svc/SearchBrowseTree"
+        headers = self._get_headers(aspxauth_container["ASPXAUTH"])
+
+        query_text = self._generate_query_text(previous_courts)
+        data = {
+            "searchDetails": {
+                "QueryText": query_text,
+                "ReturnOnExit": False,
+                "RequiredRows": 500,
+                "SelectedCourt": "",
+                "HighlightTree": True,
+                "IsIclrContent": True,
+                "IsJudiciaryPackage": False,
+                "SearchText": "",
+                "IsMootCourtAccessible": "false",
+                "CountryName": "india",
+                "SearchType": "Judgments (Court Wise)",
+                "IsBrowseBySearch": False,
+                "SearchField": f"{previous_courts[-1].level}",  # Adjust the search field based on depth
+                "User SubscribedAddonList": ["NoAddOn"],
+                "QueryType": f"{previous_courts[-1].key}",
+                "parentNode": f"{previous_courts[-2].level}" if len(previous_courts) > 1 else "Node1",
+                "HasChildren": True,
+            }
+        }
+
+        year, month, day = self.record.get("Year"), self.record.get("Month"), self.record.get("Date")
+
+        response = requests.post(url, headers=headers, json=data)
+        if response.status_code == 200 and self._validate_court_response(response, country.level, '_check_if_day_was_scraped'):
+            response_titles = [children.get("title") for children in response.json().get("d")[0].get("children", [])]
+
+            date = datetime.strptime(f"{year}-{month}-{day}", "%Y-%m-%d").date()
+            database_titles = [case.case_name for case in get_cases_by_date(date) if case]
+
+            if sorted(response_titles) == sorted(database_titles):
+                return True
+            else:
+                return False
 
     def _form_record(self, court: dict) -> dict:
         record = {court.get("level"): court.get("key").split("$")[0]}
