@@ -9,9 +9,9 @@ import requests
 from requests import Response
 
 from app import constants
-from app.db.cases.crud import insert_case, get_case_by_scc_id, get_cases_by_date
-from app.db.scraped.crud import insert_scraped_record
 from app.custom_dataclasses import Court
+from app.db.cases.crud import get_case_by_scc_id, get_cases_by_date, insert_case
+from app.db.scraped.crud import insert_scraped_record
 from app.logger import logger
 from app.scrape.cases import CasesScrapper
 from app.scrape.citations import CitationsAPI
@@ -30,12 +30,16 @@ class CourtsAPI:
         countries = self.get_countries()
 
         for country in countries:
-            courts_data = self._fetch_courts_and_subcourts(aspxauth_container, country, [country])
+            courts_data = self._fetch_courts_and_subcourts(
+                aspxauth_container, country, [country]
+            )
             all_courts[country.key_formatted()] = courts_data
 
         return all_courts
 
-    def _fetch_courts_and_subcourts(self, aspxauth_container: dict, country: str, previous_courts: list) -> list:
+    def _fetch_courts_and_subcourts(
+        self, aspxauth_container: dict, country: str, previous_courts: list
+    ) -> list:
         """
         Recursively retrieves court data from a hierarchical API structure, starting with a specified country and
         traversing its court hierarchy. The function builds and sends POST requests to the API using authentication
@@ -72,7 +76,9 @@ class CourtsAPI:
                 "SearchField": f"{previous_courts[-1].level}",  # Adjust the search field based on depth
                 "User SubscribedAddonList": ["NoAddOn"],
                 "QueryType": f"{previous_courts[-1].key}",
-                "parentNode": f"{previous_courts[-2].level}" if len(previous_courts) > 1 else "Node1",
+                "parentNode": f"{previous_courts[-2].level}"
+                if len(previous_courts) > 1
+                else "Node1",
                 "HasChildren": True,
             }
         }
@@ -84,17 +90,22 @@ class CourtsAPI:
             # Where level is the type of court (e.g. "Year", "Month", "Title")
             # And key is the value of that level (e.g. "2021", "January", "Supreme Court")
             response = requests.post(url, headers=headers, json=data)
-            if response.status_code == 200 and self._validate_court_response(response, country.level,
-                                                                             '_fetch_courts_and_subcourts'):
+            if response.status_code == 200 and self._validate_court_response(
+                response, country.level, "_fetch_courts_and_subcourts"
+            ):
                 courts_data = response.json().get("d")[0].get("children", [])
                 for court_data in courts_data:
-                    court = Court(key=court_data.get("key"), level=court_data.get("level"))
+                    court = Court(
+                        key=court_data.get("key"), level=court_data.get("level")
+                    )
                     self.record[court.level] = court.key_formatted()
 
                     # 'Title' here is the final level of the court hierarchy
                     # If the court is at the final level, fetch additional data and store it in the database
-                    if court.level == 'Title':
-                        xml = self.get_xml_path(aspxauth_container, court.key_formatted())
+                    if court.level == "Title":
+                        xml = self.get_xml_path(
+                            aspxauth_container, court.key_formatted()
+                        )
                         page = self.get_page_data(aspxauth_container, xml)
                         self.record["page_xml"] = page
 
@@ -106,10 +117,17 @@ class CourtsAPI:
                         if existing_case:
                             continue
 
-                        case_id = self.save_case_into_db(case_info=case_info, record=self.record)
+                        case_id = self.save_case_into_db(
+                            case_info=case_info, record=self.record
+                        )
 
                         # For each citation in the case, scrap additional data and store it in the database
-                        self.citations_executor.submit(self._process_citations, aspxauth_container, case_info.get("citations"), case_id)
+                        self.citations_executor.submit(
+                            self._process_citations,
+                            aspxauth_container,
+                            case_info.get("citations"),
+                            case_id,
+                        )
 
                         # Store the record in the database
                         # It is just for justification that the record was scraped
@@ -124,14 +142,21 @@ class CourtsAPI:
 
                         self.records.append(self.record.copy())
                     else:
-                        self.cases_executor.submit(self._fetch_courts_and_subcourts, aspxauth_container, country, previous_courts + [court])
+                        self.cases_executor.submit(
+                            self._fetch_courts_and_subcourts,
+                            aspxauth_container,
+                            country,
+                            previous_courts + [court],
+                        )
 
         except Exception as e:
-            logger.error({
-                "message": "Error fetching courts and subcourts",
-                "exception": str(e),
-                "location": "_fetch_courts_and_subcourts",
-            })
+            logger.error(
+                {
+                    "message": "Error fetching courts and subcourts",
+                    "exception": str(e),
+                    "location": "_fetch_courts_and_subcourts",
+                }
+            )
             time.sleep(0.5)
 
         return courts_scraped
@@ -166,9 +191,11 @@ class CourtsAPI:
             formatted_nodes.append(node_string)
 
         formatted_nodes.reverse()
-        return ' AND '.join(formatted_nodes)
+        return " AND ".join(formatted_nodes)
 
-    def _validate_court_response(self, response: Response, searched_country: str, func: str) -> bool:
+    def _validate_court_response(
+        self, response: Response, searched_country: str, func: str
+    ) -> bool:
         """
         Validates SCC API response for certain searched court.
 
@@ -178,31 +205,42 @@ class CourtsAPI:
         :return: boolean that says either the court is valid or not
         """
 
-        if not response.json().get('d'):
-            logger.error({
-                "message": f"key 'd' not found for courts of country {searched_country}",
-                "location": func,
-            })
+        if not response.json().get("d"):
+            logger.error(
+                {
+                    "message": f"key 'd' not found for courts of country {searched_country}",
+                    "location": func,
+                }
+            )
             return False
 
-        elif not isinstance(response.json().get('d'), list) or len(response.json().get('d')) < 1:
-            logger.error({
-                "message": f"key 'd' has empty result for {searched_country}",
-                "location": func,
-            })
+        elif (
+            not isinstance(response.json().get("d"), list)
+            or len(response.json().get("d")) < 1
+        ):
+            logger.error(
+                {
+                    "message": f"key 'd' has empty result for {searched_country}",
+                    "location": func,
+                }
+            )
             return False
 
-        elif not response.json().get('d')[0].get('children'):
-            logger.error({
-                "message": f"no children found for court {response.json().get('d')[0]}",
-                "location": func,
-            })
+        elif not response.json().get("d")[0].get("children"):
+            logger.error(
+                {
+                    "message": f"no children found for court {response.json().get('d')[0]}",
+                    "location": func,
+                }
+            )
             return False
 
         else:
             return True
 
-    def _check_if_day_was_scraped(self, aspxauth_container: dict, country: str, previous_courts: list) -> bool:
+    def _check_if_day_was_scraped(
+        self, aspxauth_container: dict, country: str, previous_courts: list
+    ) -> bool:
         url = f"{constants.BASE_URL}/Searcher.svc/SearchBrowseTree"
         headers = self._get_headers(aspxauth_container["ASPXAUTH"])
 
@@ -224,19 +262,32 @@ class CourtsAPI:
                 "SearchField": f"{previous_courts[-1].level}",  # Adjust the search field based on depth
                 "User SubscribedAddonList": ["NoAddOn"],
                 "QueryType": f"{previous_courts[-1].key}",
-                "parentNode": f"{previous_courts[-2].level}" if len(previous_courts) > 1 else "Node1",
+                "parentNode": f"{previous_courts[-2].level}"
+                if len(previous_courts) > 1
+                else "Node1",
                 "HasChildren": True,
             }
         }
 
-        year, month, day = self.record.get("Year"), self.record.get("Month"), self.record.get("Date")
+        year, month, day = (
+            self.record.get("Year"),
+            self.record.get("Month"),
+            self.record.get("Date"),
+        )
 
         response = requests.post(url, headers=headers, json=data)
-        if response.status_code == 200 and self._validate_court_response(response, country.level, '_check_if_day_was_scraped'):
-            response_titles = [children.get("title") for children in response.json().get("d")[0].get("children", [])]
+        if response.status_code == 200 and self._validate_court_response(
+            response, country.level, "_check_if_day_was_scraped"
+        ):
+            response_titles = [
+                children.get("title")
+                for children in response.json().get("d")[0].get("children", [])
+            ]
 
             date = datetime.strptime(f"{year}-{month}-{day}", "%Y-%m-%d").date()
-            database_titles = [case.case_name for case in get_cases_by_date(date) if case]
+            database_titles = [
+                case.case_name for case in get_cases_by_date(date) if case
+            ]
 
             if sorted(response_titles) == sorted(database_titles):
                 return True
@@ -250,7 +301,10 @@ class CourtsAPI:
         return record
 
     def get_countries(self) -> list[Court]:
-        return [Court(key="  India", level="Node2"), Court(key="International", level="Node2")]
+        return [
+            Court(key="  India", level="Node2"),
+            Court(key="International", level="Node2"),
+        ]
 
     def get_xml_path(self, aspxauth_container, title):
         url = f"{constants.BASE_URL}/Searcher.svc/SearchRelativePath"
@@ -284,11 +338,13 @@ class CourtsAPI:
                 return response.json().get("d")
             except Exception as e:
                 time.sleep(0.5)
-                logger.error({
-                    "message": "Error while getting XML Path for title. Retrying...",
-                    "exception": e,
-                    "location": "CourtAPI.get_xml_path",
-                })
+                logger.error(
+                    {
+                        "message": "Error while getting XML Path for title. Retrying...",
+                        "exception": e,
+                        "location": "CourtAPI.get_xml_path",
+                    }
+                )
 
     def get_page_data(self, aspxauth_container, xml_path):
         url = f"{constants.BASE_URL}/HelperServices/ServicesForCourtFunctionality.asmx/GetPageData"
@@ -318,24 +374,33 @@ class CourtsAPI:
                 return response.json().get("d")
             except Exception as e:
                 time.sleep(0.5)
-                logger.error({
-                    "message": "Error while getting page data. Retrying...",
-                    "exception": e,
-                    "location": "CourtAPI.get_page_data",
-                })
+                logger.error(
+                    {
+                        "message": "Error while getting page data. Retrying...",
+                        "exception": e,
+                        "location": "CourtAPI.get_page_data",
+                    }
+                )
 
     def save_case_into_db(self, case_info: dict, record: dict):
         record = record.copy()
         record.update(case_info)
 
         if not isinstance(record, dict):
-            logger.error({
-                "message": "Record is not a dictionary",
-                "location": "save_record_into_db",
-            })
+            logger.error(
+                {
+                    "message": "Record is not a dictionary",
+                    "location": "save_record_into_db",
+                }
+            )
             return
 
-        date = datetime.strptime(f"{record.get('Year')}-{record.get('Month')}-{record.get('Date')}", "%Y-%m-%d").date(),
+        date = (
+            datetime.strptime(
+                f"{record.get('Year')}-{record.get('Month')}-{record.get('Date')}",
+                "%Y-%m-%d",
+            ).date(),
+        )
         case_id = insert_case(
             scc_id=record.get("scc_id"),
             bench_name=record.get("bench_name"),
@@ -365,6 +430,10 @@ class CourtsAPI:
             "citations": citations,
         }
 
-    def _process_citations(self, aspxauth_container: dict, citations: list[str], case_id: int):
+    def _process_citations(
+        self, aspxauth_container: dict, citations: list[str], case_id: int
+    ):
         for citation_id in citations:
-            self.citation_api.proccess_citation(aspxauth_container, citation_id, case_id)
+            self.citation_api.proccess_citation(
+                aspxauth_container, citation_id, case_id
+            )
