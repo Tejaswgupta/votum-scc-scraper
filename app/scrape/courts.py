@@ -11,7 +11,9 @@ from requests import Response
 from app import constants
 from app.custom_dataclasses import Court
 from app.db.cases.crud import get_case_by_scc_id, get_cases_by_date, insert_case
+from app.db.database import Session
 from app.db.scraped.crud import insert_scraped_record
+from app.db.scraped.model import Scraped
 from app.logger import logger
 from app.scrape.cases import CasesScrapper
 from app.scrape.citations import CitationsAPI
@@ -138,6 +140,8 @@ class CourtsAPI:
                             month=int(self.record.get("Month")),
                             day=int(self.record.get("Date")),
                             completed=True,
+                            total_cases=len(courts_data),
+                            scraped_cases=len(self.records),
                         )
 
                         self.records.append(self.record.copy())
@@ -240,7 +244,7 @@ class CourtsAPI:
 
     def _check_if_day_was_scraped(
         self, aspxauth_container: dict, country: str, previous_courts: list
-    ) -> bool:
+    ) -> tuple[bool, list, list]:
         url = f"{constants.BASE_URL}/Searcher.svc/SearchBrowseTree"
         headers = self._get_headers(aspxauth_container["ASPXAUTH"])
 
@@ -289,10 +293,8 @@ class CourtsAPI:
                 case.case_name for case in get_cases_by_date(date) if case
             ]
 
-            if sorted(response_titles) == sorted(database_titles):
-                return True
-            else:
-                return False
+            is_complete = sorted(response_titles) == sorted(database_titles)
+            return is_complete, response_titles, database_titles
 
     def _form_record(self, court: dict) -> dict:
         record = {court.get("level"): court.get("key").split("$")[0]}
@@ -437,3 +439,33 @@ class CourtsAPI:
             self.citation_api.proccess_citation(
                 aspxauth_container, citation_id, case_id
             )
+
+    def _get_or_create_scrape_record(self) -> Scraped:
+        """Get existing scrape record or create new one"""
+        with Session() as session:
+            record = (
+                session.query(Scraped)
+                .filter(
+                    Scraped.court_type == self.record.get("Type"),
+                    Scraped.court_name == self.record.get("Name"),
+                    Scraped.year == self.record.get("Year"),
+                    Scraped.month == self.record.get("Month"),
+                    Scraped.day == self.record.get("Date"),
+                )
+                .first()
+            )
+
+            if not record:
+                record = Scraped(
+                    court_type=self.record.get("Type"),
+                    court_name=self.record.get("Name"),
+                    year=self.record.get("Year"),
+                    month=self.record.get("Month"),
+                    day=self.record.get("Date"),
+                    completed=False,
+                    scraped_cases=0,
+                )
+                session.add(record)
+                session.commit()
+
+            return record
